@@ -10,6 +10,9 @@ import {
   Check,
   LogOut,
   Loader2,
+  Lock,
+  Star,
+  Download,
 } from "lucide-react";
 import { supabase } from "./supabaseClient";
 
@@ -19,11 +22,18 @@ const RULE = "#d9d4c4";
 const CREDIT = "#2f6844";
 const DEBT = "#b23a11";
 const MUTED = "#8a8474";
+const GOLD = "#a4790a";
 
 const uid = () => Math.random().toString(36).slice(2, 9);
 const CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // sans 0/O/1/I
 const genCode = () =>
   Array.from({ length: 6 }, () => CODE_CHARS[Math.floor(Math.random() * CODE_CHARS.length)]).join("");
+
+const FREE_EXPENSE_LIMIT = 15;
+
+// ---- Paiement Orange Money (manuel, pas d'API marchand pour l'instant) ----
+const OM_NUMBER = "+236 72 03 96 64";
+const OM_AMOUNT_FCFA = "3 000 FCFA";
 
 export default function App() {
   const [screen, setScreen] = useState("landing"); // landing | app
@@ -36,6 +46,10 @@ export default function App() {
   const [expenses, setExpenses] = useState([]);
   const [saveState, setSaveState] = useState("idle"); // idle | saving | saved | error
   const [copied, setCopied] = useState(false);
+  const [premium, setPremium] = useState(false);
+  const [premiumRequested, setPremiumRequested] = useState(false);
+  const [payModalOpen, setPayModalOpen] = useState(false);
+  const [payCopied, setPayCopied] = useState(false);
 
   const [newPerson, setNewPerson] = useState("");
   const [desc, setDesc] = useState("");
@@ -57,7 +71,9 @@ export default function App() {
     setLandingError("");
     const newCode = genCode();
     const payload = { people: [], expenses: [] };
-    const { error } = await supabase.from("tickets").insert({ code: newCode, data: payload });
+    const { error } = await supabase
+      .from("tickets")
+      .insert({ code: newCode, data: payload, premium: false, premium_requested: false });
     if (error) {
       setLandingError("Impossible de créer le ticket. Vérifie la config Supabase.");
       setLandingBusy(false);
@@ -67,20 +83,26 @@ export default function App() {
     setCode(newCode);
     setPeople([]);
     setExpenses([]);
+    setPremium(false);
+    setPremiumRequested(false);
     loadedRef.current = true;
     setScreen("app");
     setLandingBusy(false);
   };
 
-  const joinGroup = async () => {
-    const c = joinInput.trim().toUpperCase();
+  const joinGroup = async (forcedCode) => {
+    const c = (forcedCode || joinInput).trim().toUpperCase();
     if (c.length < 4) {
       setLandingError("Entre un code valide.");
       return;
     }
     setLandingBusy(true);
     setLandingError("");
-    const { data: row, error } = await supabase.from("tickets").select("data").eq("code", c).single();
+    const { data: row, error } = await supabase
+      .from("tickets")
+      .select("data, premium, premium_requested")
+      .eq("code", c)
+      .single();
     if (error || !row) {
       setLandingError("Aucun ticket trouvé avec ce code.");
       setLandingBusy(false);
@@ -91,6 +113,8 @@ export default function App() {
     setCode(c);
     setPeople(data.people || []);
     setExpenses(data.expenses || []);
+    setPremium(!!row.premium);
+    setPremiumRequested(!!row.premium_requested);
     loadedRef.current = true;
     setScreen("app");
     setLandingBusy(false);
@@ -104,7 +128,41 @@ export default function App() {
     setJoinInput("");
     setPeople([]);
     setExpenses([]);
+    setPremium(false);
+    setPremiumRequested(false);
     setSaveState("idle");
+  };
+
+  const markPaymentSent = async () => {
+    setPremiumRequested(true);
+    setPayModalOpen(false);
+    await supabase.from("tickets").update({ premium_requested: true }).eq("code", code);
+  };
+
+  const copyOMNumber = async () => {
+    try {
+      await navigator.clipboard.writeText(OM_NUMBER);
+      setPayCopied(true);
+      setTimeout(() => setPayCopied(false), 1500);
+    } catch {
+      /* silencieux */
+    }
+  };
+
+  const exportCSV = () => {
+    if (!premium) return;
+    const rows = [["Date", "Description", "Montant", "Payé par", "Partagé entre"]];
+    expenses.forEach((e) => {
+      rows.push([e.date, e.desc, e.amount.toFixed(2), nameOf(e.paidBy), e.shared.map(nameOf).join(" / ")]);
+    });
+    const csv = rows.map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `splitcoloc-${code}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   // ---- synchro en direct : on écoute les changements des autres colocs ----
@@ -116,6 +174,8 @@ export default function App() {
         "postgres_changes",
         { event: "UPDATE", schema: "public", table: "tickets", filter: `code=eq.${code}` },
         (payload) => {
+          setPremium(!!payload.new.premium);
+          setPremiumRequested(!!payload.new.premium_requested);
           const incoming = JSON.stringify(payload.new.data);
           if (incoming === lastPushedRef.current) return; // c'est notre propre sauvegarde, on ignore
           lastPushedRef.current = incoming;
@@ -183,6 +243,9 @@ export default function App() {
     if (!amt || amt <= 0) return setFormError("Montant invalide.");
     if (!paidBy) return setFormError("Choisis qui a payé.");
     if (people.length < 2) return setFormError("Ajoute au moins 2 colocs d'abord.");
+    if (!premium && expenses.length >= FREE_EXPENSE_LIMIT) {
+      return setFormError(`Limite gratuite atteinte (${FREE_EXPENSE_LIMIT} dépenses). Passe premium pour continuer.`);
+    }
     const shared = splitWith.length > 0 ? splitWith : people.map((p) => p.id);
     setExpenses([
       { id: uid(), desc: desc.trim(), amount: amt, paidBy, shared, date: expDate },
@@ -432,6 +495,11 @@ export default function App() {
           >
             {code} {copied ? <Check size={11} color={CREDIT} /> : <Copy size={11} />}
           </div>
+          {premium && (
+            <div style={{ fontSize: 9, color: GOLD, fontWeight: 700, marginTop: 5, display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 3 }}>
+              <Star size={10} fill={GOLD} /> PREMIUM
+            </div>
+          )}
           <button
             onClick={leaveGroup}
             style={{ background: "none", border: "none", color: MUTED, fontSize: 9, cursor: "pointer", marginTop: 5, display: "flex", alignItems: "center", gap: 3 }}
@@ -441,6 +509,117 @@ export default function App() {
         </div>
       </div>
       <div style={{ borderBottom: `1px dashed ${RULE}`, marginBottom: 16 }} />
+
+      {premiumRequested && !premium && (
+        <div
+          style={{
+            fontSize: 11,
+            border: `1px dashed ${GOLD}`,
+            color: GOLD,
+            padding: "8px 10px",
+            marginBottom: 16,
+          }}
+        >
+          ⏳ Paiement signalé — en attente de validation par ton coloc-hébergeur (généralement sous quelques heures).
+        </div>
+      )}
+
+      {!premium && (
+        <div
+          style={{
+            border: `1px solid ${INK}`,
+            padding: "10px 12px",
+            marginBottom: 18,
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            gap: 10,
+          }}
+        >
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 700, display: "flex", alignItems: "center", gap: 5 }}>
+              <Star size={12} color={GOLD} fill={GOLD} /> Passer premium
+            </div>
+            <div style={{ fontSize: 10, color: MUTED, marginTop: 2 }}>
+              Dépenses illimitées + export CSV, à vie sur ce ticket.
+            </div>
+          </div>
+          <button className="sc-btn" onClick={() => setPayModalOpen(true)} style={{ whiteSpace: "nowrap" }}>
+            Débloquer
+          </button>
+        </div>
+      )}
+
+      {payModalOpen && (
+        <div
+          onClick={() => setPayModalOpen(false)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(26,26,26,0.55)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 50,
+            padding: 16,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: PAPER,
+              maxWidth: 360,
+              width: "100%",
+              padding: "22px 20px",
+              border: `1px solid ${INK}`,
+            }}
+          >
+            <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 15, display: "flex", alignItems: "center", gap: 6 }}>
+              <Star size={13} color={GOLD} fill={GOLD} /> Débloquer Premium
+            </div>
+            <div style={{ fontSize: 11, color: MUTED, marginTop: 4, marginBottom: 16 }}>
+              Dépenses illimitées + export CSV pour ce ticket, à vie.
+            </div>
+
+            <div style={{ border: `1px dashed ${RULE}`, padding: "12px 10px", marginBottom: 14 }}>
+              <div style={{ fontSize: 10, color: MUTED, marginBottom: 3 }}>MONTANT À ENVOYER</div>
+              <div style={{ fontSize: 16, fontWeight: 700 }}>{OM_AMOUNT_FCFA}</div>
+            </div>
+
+            <div style={{ border: `1px dashed ${RULE}`, padding: "12px 10px", marginBottom: 14 }}>
+              <div style={{ fontSize: 10, color: MUTED, marginBottom: 5 }}>NUMÉRO ORANGE MONEY</div>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                <span style={{ fontSize: 14, fontWeight: 700, letterSpacing: "0.03em" }}>{OM_NUMBER}</span>
+                <button
+                  onClick={copyOMNumber}
+                  style={{ background: "none", border: `1px solid ${INK}`, padding: "4px 7px", cursor: "pointer", display: "flex", alignItems: "center", gap: 4, fontSize: 10 }}
+                >
+                  {payCopied ? <Check size={11} color={CREDIT} /> : <Copy size={11} />}
+                  {payCopied ? "copié" : "copier"}
+                </button>
+              </div>
+            </div>
+
+            <div style={{ fontSize: 10, color: MUTED, marginBottom: 16, lineHeight: 1.6 }}>
+              1. Envoie <strong>{OM_AMOUNT_FCFA}</strong> via Orange Money au numéro ci-dessus.
+              <br />
+              2. Indique la référence <strong>{code}</strong> dans le message de transfert.
+              <br />
+              3. Clique "J'ai envoyé le paiement" ci-dessous — le premium est activé après vérification.
+            </div>
+
+            <button className="sc-btn" onClick={markPaymentSent} style={{ width: "100%", marginBottom: 8 }}>
+              J'ai envoyé le paiement
+            </button>
+            <button
+              onClick={() => setPayModalOpen(false)}
+              style={{ width: "100%", background: "none", border: "none", color: MUTED, fontSize: 11, cursor: "pointer", padding: "4px 0" }}
+            >
+              Annuler
+            </button>
+          </div>
+        </div>
+      )}
 
       <Section icon={<Users size={13} />} title="Colocs">
         {people.length === 0 && (
@@ -535,6 +714,29 @@ export default function App() {
           <div style={{ display: "flex", justifyContent: "space-between", borderTop: `1px solid ${INK}`, marginTop: 10, paddingTop: 6, fontWeight: 700, fontSize: 13 }}>
             <span>TOTAL</span>
             <span>{fmt(total)} €</span>
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 10 }}>
+            <span style={{ fontSize: 9, color: MUTED }}>
+              {premium ? "dépenses illimitées" : `${expenses.length}/${FREE_EXPENSE_LIMIT} dépenses gratuites`}
+            </span>
+            <button
+              onClick={premium ? exportCSV : () => setPayModalOpen(true)}
+              className="sc-btn-ghost"
+              style={{
+                fontSize: 10,
+                padding: "5px 9px",
+                display: "flex",
+                alignItems: "center",
+                gap: 4,
+                border: `1px solid ${premium ? INK : RULE}`,
+                color: premium ? INK : MUTED,
+                background: "none",
+                cursor: "pointer",
+              }}
+              title={premium ? "Exporter en CSV" : "Passe premium pour exporter"}
+            >
+              {premium ? <Download size={11} /> : <Lock size={11} />} export CSV
+            </button>
           </div>
         </Section>
       )}
