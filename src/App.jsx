@@ -33,7 +33,7 @@ const FREE_EXPENSE_LIMIT = 15;
 
 // ---- Paiement Orange Money (manuel, pas d'API marchand pour l'instant) ----
 const OM_NUMBER = "+236 72 03 96 64";
-const OM_AMOUNT_FCFA = "3 000 FCFA";
+const OM_AMOUNT_FCFA = "5 000 FCFA";
 
 export default function App() {
   const [screen, setScreen] = useState("landing"); // landing | app
@@ -153,7 +153,7 @@ export default function App() {
     if (!premium) return;
     const rows = [["Date", "Description", "Montant", "Payé par", "Partagé entre"]];
     expenses.forEach((e) => {
-      rows.push([e.date, e.desc, e.amount.toFixed(2), nameOf(e.paidBy), e.shared.map(nameOf).join(" / ")]);
+      rows.push([e.date, e.desc, Math.round(e.amount), nameOf(e.paidBy), e.shared.map(nameOf).join(" / ")]);
     });
     const csv = rows.map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n");
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
@@ -309,7 +309,7 @@ export default function App() {
   }, [balances]);
 
   const total = expenses.reduce((s, e) => s + e.amount, 0);
-  const fmt = (n) => n.toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const fmt = (n) => `${Math.round(n).toLocaleString("fr-FR")} FCFA`;
   const fmtDate = (d) => {
     try {
       return new Date(d + "T00:00:00").toLocaleDateString("fr-FR", { day: "2-digit", month: "short" });
@@ -541,7 +541,7 @@ export default function App() {
               <Star size={12} color={GOLD} fill={GOLD} /> Passer premium
             </div>
             <div style={{ fontSize: 10, color: MUTED, marginTop: 2 }}>
-              Dépenses illimitées + export CSV, à vie sur ce ticket.
+              Dépenses illimitées + export CSV, à vie sur ce ticket — {OM_AMOUNT_FCFA}.
             </div>
           </div>
           <button className="sc-btn" onClick={() => setPayModalOpen(true)} style={{ whiteSpace: "nowrap" }}>
@@ -660,7 +660,7 @@ export default function App() {
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           <input className="sc-input" placeholder="Description (ex: Courses Carrefour)" value={desc} onChange={(e) => setDesc(e.target.value)} />
           <div style={{ display: "flex", gap: 8 }}>
-            <input className="sc-input" placeholder="Montant €" value={amount} onChange={(e) => setAmount(e.target.value)} style={{ maxWidth: 90 }} />
+            <input className="sc-input" placeholder="Montant FCFA" value={amount} onChange={(e) => setAmount(e.target.value)} style={{ maxWidth: 100 }} />
             <input className="sc-input" type="date" value={expDate} onChange={(e) => setExpDate(e.target.value)} style={{ maxWidth: 130 }} />
           </div>
           <select className="sc-input" value={paidBy} onChange={(e) => setPaidBy(e.target.value)} style={{ borderBottom: `1px dashed ${RULE}` }}>
@@ -695,7 +695,7 @@ export default function App() {
                   <span style={{ color: MUTED, fontSize: 10, marginRight: 6 }}>{fmtDate(e.date)}</span>
                   <span>{e.desc}</span>
                   <span className="sc-dotted" />
-                  <span style={{ fontWeight: 600 }}>{fmt(e.amount)} €</span>
+                  <span style={{ fontWeight: 600 }}>{fmt(e.amount)}</span>
                   {confirmDelete?.type === "expense" && confirmDelete.id === e.id ? (
                     <span style={{ display: "flex", gap: 4, marginLeft: 8 }}>
                       <button className="sc-danger-btn" onClick={() => removeExpense(e.id)}>confirmer</button>
@@ -713,7 +713,7 @@ export default function App() {
           </div>
           <div style={{ display: "flex", justifyContent: "space-between", borderTop: `1px solid ${INK}`, marginTop: 10, paddingTop: 6, fontWeight: 700, fontSize: 13 }}>
             <span>TOTAL</span>
-            <span>{fmt(total)} €</span>
+            <span>{fmt(total)}</span>
           </div>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 10 }}>
             <span style={{ fontSize: 9, color: MUTED }}>
@@ -752,7 +752,7 @@ export default function App() {
                 <div key={p.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}>
                   <span>{p.name}</span>
                   <span style={{ fontWeight: 600, color: positive ? CREDIT : negative ? DEBT : MUTED }}>
-                    {positive ? "+" : ""}{fmt(v)} €
+                    {positive ? "+" : ""}{fmt(v)}
                   </span>
                 </div>
               );
@@ -770,7 +770,7 @@ export default function App() {
                 <ArrowRight size={12} color={MUTED} />
                 <span style={{ fontWeight: 600 }}>{nameOf(s.to)}</span>
                 <span className="sc-dotted" />
-                <span style={{ fontWeight: 700, color: DEBT }}>{fmt(s.amt)} €</span>
+                <span style={{ fontWeight: 700, color: DEBT }}>{fmt(s.amt)}</span>
               </div>
             ))}
           </div>
